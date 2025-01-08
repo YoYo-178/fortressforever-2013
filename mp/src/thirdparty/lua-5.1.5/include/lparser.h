@@ -68,6 +68,7 @@ typedef struct FuncState {
   int freereg;  /* first free register */
   int nk;  /* number of elements in `k' */
   int np;  /* number of elements in `p' */
+  int prohibitedloc;  /* index (into actvar) of first prohibited local */
   short nlocvars;  /* number of elements in `locvars' */
   lu_byte nactvar;  /* number of active local variables */
   upvaldesc upvalues[LUAI_MAXUPVALUES];  /* upvalues */

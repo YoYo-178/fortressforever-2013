@@ -18,7 +18,11 @@
 
 
 #undef PI
+#undef TAU
+#undef E
 #define PI (3.14159265358979323846)
+#define TAU (6.28318530717958623199)
+#define E (2.71828182845904523536)
 #define RADIANS_PER_DEGREE (PI/180.0)
 
 
@@ -112,7 +116,16 @@ static int math_pow (lua_State *L) {
 }
 
 static int math_log (lua_State *L) {
-  lua_pushnumber(L, log(luaL_checknumber(L, 1)));
+  lua_Number x = luaL_checknumber(L, 1);
+  lua_Number res;
+  if (lua_isnoneornil(L, 2))
+    res = log(x);
+  else {
+    lua_Number base = luaL_checknumber(L, 2);
+    if (base == 10.0) res = log10(x);
+    else res = log(x)/log(base);
+  }
+  lua_pushnumber(L, res);
   return 1;
 }
 
@@ -252,6 +265,10 @@ LUALIB_API int luaopen_math (lua_State *L) {
   luaL_register(L, LUA_MATHLIBNAME, mathlib);
   lua_pushnumber(L, PI);
   lua_setfield(L, -2, "pi");
+  lua_pushnumber(L, TAU);
+  lua_setfield(L, -2, "tau");
+  lua_pushnumber(L, E);
+  lua_setfield(L, -2, "e");
   lua_pushnumber(L, HUGE_VAL);
   lua_setfield(L, -2, "huge");
 #if defined(LUA_COMPAT_MOD)

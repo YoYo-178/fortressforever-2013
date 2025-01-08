@@ -197,18 +197,30 @@ OP_FORLOOP,/*	A sBx	R(A)+=R(A+2);
 			if R(A) <?= R(A+1) then { pc+=sBx; R(A+3)=R(A) }*/
 OP_FORPREP,/*	A sBx	R(A)-=R(A+2); pc+=sBx				*/
 
+#ifdef LUA_COMPAT_TFORLOOP
 OP_TFORLOOP,/*	A C	R(A+3), ... ,R(A+2+C) := R(A)(R(A+1), R(A+2)); 
-                        if R(A+3) ~= nil then R(A+2)=R(A+3) else pc++	*/ 
+                        if R(A+3) ~= nil then R(A+2)=R(A+3) else pc++	*/
+#endif 
 OP_SETLIST,/*	A B C	R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B	*/
 
 OP_CLOSE,/*	A 	close all variables in the stack up to (>=) R(A)*/
 OP_CLOSURE,/*	A Bx	R(A) := closure(KPROTO[Bx], R(A), ... ,R(A+n))	*/
 
-OP_VARARG/*	A B	R(A), R(A+1), ..., R(A+B-1) = vararg		*/
+OP_VARARG,/*	A B	R(A), R(A+1), ..., R(A+B-1) = vararg		*/
+
+OP_TESTNIL,/*   A sBx   if R(A+1) ~= nil then R(A)=R(A+1); pc+=sBx      */
+OP_TFORCALL,/*   A B C   R(A), ..., R(A+C-2) := R(A-3)(R(A-2), R(A-1));  */
+
+OP_ADD_EQ,/*	A B R(A) := R(A) + RK(B)				*/
+OP_SUB_EQ,/*	A B R(A) := R(A) - RK(B)				*/
+OP_MUL_EQ,/*	A B R(A) := R(A) * RK(B)				*/
+OP_DIV_EQ,/*	A B R(A) := R(A) / RK(B)				*/
+OP_MOD_EQ,/*	A B R(A) := R(A) % RK(B)				*/
+OP_POW_EQ,/*	A B R(A) := R(A) ^ RK(B)				*/
 } OpCode;
 
 
-#define NUM_OPCODES	(cast(int, OP_VARARG) + 1)
+#define NUM_OPCODES	(cast(int, OP_POW_EQ) + 1)
 
 
 
@@ -217,6 +229,8 @@ OP_VARARG/*	A B	R(A), R(A+1), ..., R(A+B-1) = vararg		*/
   (*) In OP_CALL, if (B == 0) then B = top. C is the number of returns - 1,
       and can be 0: OP_CALL then sets `top' to last_result+1, so
       next open instruction (OP_CALL, OP_RETURN, OP_SETLIST) may use `top'.
+
+  (*) In OP_TFORCALL, B must be 3 and C may not be 0.
 
   (*) In OP_VARARG, if (B == 0) then use actual number of varargs and
       set top (like in OP_CALL with C == 0).

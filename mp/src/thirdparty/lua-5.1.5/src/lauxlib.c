@@ -23,6 +23,7 @@
 #include "lua.h"
 
 #include "lauxlib.h"
+#include "lualib.h"
 
 
 #define FREELIST_REF	0	/* free list of references */
@@ -434,8 +435,19 @@ LUALIB_API char *luaL_prepbuffer (luaL_Buffer *B) {
 
 
 LUALIB_API void luaL_addlstring (luaL_Buffer *B, const char *s, size_t l) {
-  while (l--)
-    luaL_addchar(B, *s++);
+  while (l) {
+    size_t space = bufffree(B);
+    if (space == 0) {
+      luaL_prepbuffer(B);
+      lua_assert(bufffree(B) == LUAL_BUFFERSIZE);
+      space = LUAL_BUFFERSIZE;
+    }
+    if (space > l) space = l;
+    memcpy(B->p, s, space);
+    B->p += space;
+    s += space;
+    l -= space;
+  }
 }
 
 

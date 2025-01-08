@@ -35,11 +35,12 @@
 
 /* ORDER RESERVED */
 const char *const luaX_tokens [] = {
-    "and", "break", "do", "else", "elseif",
+    "and", "break", "continue", "do", "else", "elseif",
     "end", "false", "for", "function", "if",
     "in", "local", "nil", "not", "or", "repeat",
     "return", "then", "true", "until", "while",
     "..", "...", "==", ">=", "<=", "~=",
+    "+=", "-=", "*=", "/=", "%=", "^=",
     "<number>", "<name>", "<string>", "<eof>",
     NULL
 };
@@ -342,6 +343,10 @@ static int llex (LexState *ls, SemInfo *seminfo) {
       }
       case '-': {
         next(ls);
+        if (ls->current == '=') {
+          next(ls);
+          return TK_SUB_EQ;
+        }
         if (ls->current != '-') return '-';
         /* else is a comment */
         next(ls);
@@ -387,6 +392,31 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         next(ls);
         if (ls->current != '=') return '~';
         else { next(ls); return TK_NE; }
+      }
+      case '+': {
+        next(ls);
+        if (ls->current != '=') return '+';
+        else { next(ls); return TK_ADD_EQ; }
+      }
+      case '*': {
+        next(ls);
+        if (ls->current != '=') return '*';
+        else { next(ls); return TK_MUL_EQ; }
+      }
+      case '/': {
+        next(ls);
+        if (ls->current != '=') return '/';
+        else { next(ls); return TK_DIV_EQ; }
+      }
+      case '%': {
+        next(ls);
+        if (ls->current != '=') return '%';
+        else { next(ls); return TK_MOD_EQ; }
+      }
+      case '^': {
+        next(ls);
+        if (ls->current != '=') return '^';
+        else { next(ls); return TK_POW_EQ; }
       }
       case '"':
       case '\'': {

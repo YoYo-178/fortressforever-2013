@@ -56,9 +56,10 @@ LUAI_FUNC int luaZ_lookahead (ZIO *z);
 struct Zio {
   size_t n;			/* bytes still unread */
   const char *p;		/* current position in buffer */
-  lua_Reader reader;
+  lua_Reader reader;	/* reader function */
   void* data;			/* additional data */
   lua_State *L;			/* Lua state (for reader) */
+  int eoz;			/* true if reader has no more data */
 };
 
 

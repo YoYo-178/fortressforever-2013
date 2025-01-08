@@ -312,7 +312,12 @@
 */
 #define LUAI_GCMUL	200 /* GC runs 'twice the speed' of memory allocation */
 
-
+/*
+@@ LUA_COMPAT_TFORLOOP controls VM compatibility with 5.1 for..in loops
+** CHANGE it (undefine it) if you don't care about being able to run
+** precompiled 5.1 scripts
+*/
+#undef LUA_COMPAT_TFORLOOP
 
 /*
 @@ LUA_COMPAT_GETN controls compatibility with old getn behavior.
@@ -333,7 +338,7 @@
 ** CHANGE it to undefined as soon as your programs use only '...' to
 ** access vararg parameters (instead of the old 'arg' table).
 */
-#define LUA_COMPAT_VARARG
+#undef LUA_COMPAT_VARARG
 
 /*
 @@ LUA_COMPAT_MOD controls compatibility with old math.mod function.
@@ -582,6 +587,15 @@ union luai_Cast { double l_d; long l_l; };
 
 #endif
 
+#if !defined(LUA_PACK_VALUE)
+/* on platform with lua number double we could use nan packing for value */
+#if (defined(__i386) || defined (_M_IX86) || defined(__i386__)) && defined(LUA_NUMBER_DOUBLE)
+/* currently try it on known little endian platform :) */
+#define LUA_PACK_VALUE 1
+#else
+#define LUA_PACK_VALUE 0
+#endif
+#endif
 /* }================================================================== */
 
 
@@ -757,7 +771,7 @@ union luai_Cast { double l_d; long l_l; };
 ** without modifying the main part of the file.
 */
 
-
+#define JH_LUA_BINCONST
 
 #endif
 

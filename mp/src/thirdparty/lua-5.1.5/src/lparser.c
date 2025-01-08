@@ -6,6 +6,7 @@
 
 
 #include <string.h>
+#include <stdio.h>
 
 #define lparser_c
 #define LUA_CORE
@@ -40,9 +41,11 @@
 typedef struct BlockCnt {
   struct BlockCnt *previous;  /* chain */
   int breaklist;  /* list of jumps out of this loop */
+  int continuelist;  /* list of jumps onto next loop iteration */
   lu_byte nactvar;  /* # active locals outside the breakable structure */
   lu_byte upval;  /* true if some variable in the block is an upvalue */
   lu_byte isbreakable;  /* true if `block' is a loop */
+  lu_byte continuepos;  /* index of first prohibited local if after a continue */
 } BlockCnt;
 
 
@@ -61,6 +64,14 @@ static void anchor_token (LexState *ls) {
   }
 }
 
+#define MAXSRC          80
+static void parser_warning (LexState *ls, const char *msg) {
+  char buff[MAXSRC];
+  luaO_chunkid(buff, getstr(ls->source), MAXSRC);
+  msg = luaO_pushfstring(ls->L, "%s:%d: warning %s", buff, ls->linenumber, msg);
+  fprintf(stderr, "%s\n", msg);
+  fflush(stderr);
+}
 
 static void error_expected (LexState *ls, int token) {
   luaX_syntaxerror(ls,
@@ -159,8 +170,30 @@ static int registerlocalvar (LexState *ls, TString *varname) {
 
 static void new_localvar (LexState *ls, TString *name, int n) {
   FuncState *fs = ls->fs;
-  luaY_checklimit(fs, fs->nactvar+n+1, LUAI_MAXVARS, "local variables");
-  fs->actvar[fs->nactvar+n] = cast(unsigned short, registerlocalvar(ls, name));
+  int nactvar_n = fs->nactvar+n;
+
+  /* allow '_' and '(for...' duplicates */
+  const char *str_name = getstr(name);
+  if(!(str_name[0] == '(' || (name->tsv.len == 1 && str_name[0] == '_'))) {
+    int vidx = 0;
+    for (; vidx < nactvar_n; ++vidx) {
+      if (name == getlocvar(fs, vidx).varname) {
+        if(fs->bl && vidx < fs->bl->nactvar) {
+          int saved_top = lua_gettop(ls->L);
+          parser_warning(ls, luaO_pushfstring(ls->L,
+                 "Name [%s] already declared will be shadowed", str_name));
+          lua_settop(ls->L, saved_top);
+        }
+        else {
+          luaX_syntaxerror(ls, luaO_pushfstring(ls->L,
+                 "Name [%s] already declared", str_name));
+        }
+      }
+    }
+  }
+
+  luaY_checklimit(fs, nactvar_n+1, LUAI_MAXVARS, "local variables");
+  fs->actvar[nactvar_n] = cast(unsigned short, registerlocalvar(ls, name));
 }
 
 
@@ -207,8 +240,18 @@ static int indexupvalue (FuncState *fs, TString *name, expdesc *v) {
 static int searchvar (FuncState *fs, TString *n) {
   int i;
   for (i=fs->nactvar-1; i >= 0; i--) {
-    if (n == getlocvar(fs, i).varname)
-      return i;
+    if (n == getlocvar(fs, i).varname) {
+      if (i >= fs->prohibitedloc) {
+        BlockCnt *bl = fs->bl;
+        int line;
+        while (bl->continuelist == NO_JUMP)
+          bl = bl->previous;
+        line = fs->f->lineinfo[bl->continuelist];
+        fs->ls->linenumber = fs->ls->lastline; /* Go back to the name token for the error message line number */
+        luaX_lexerror(fs->ls, luaO_pushfstring(fs->L, "use of variable " LUA_QS " is not permitted in this context as its initialisation could have been skipped by the " LUA_QL("continue") " statement on line %d", n + 1, line), 0);
+      }
+       return i;
+    }
   }
   return -1;  /* not found */
 }
@@ -284,9 +327,11 @@ static void enterlevel (LexState *ls) {
 
 static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isbreakable) {
   bl->breaklist = NO_JUMP;
+  bl->continuelist = NO_JUMP;
   bl->isbreakable = isbreakable;
   bl->nactvar = fs->nactvar;
   bl->upval = 0;
+  bl->continuepos = 0;
   bl->previous = fs->bl;
   fs->bl = bl;
   lua_assert(fs->freereg == fs->nactvar);
@@ -297,6 +342,7 @@ static void leaveblock (FuncState *fs) {
   BlockCnt *bl = fs->bl;
   fs->bl = bl->previous;
   removevars(fs->ls, bl->nactvar);
+  luaK_patchtohere(fs, bl->continuelist);
   if (bl->upval)
     luaK_codeABC(fs, OP_CLOSE, bl->nactvar, 0, 0);
   /* a block either controls scope or breaks (never both) */
@@ -339,6 +385,7 @@ static void open_func (LexState *ls, FuncState *fs) {
   fs->freereg = 0;
   fs->nk = 0;
   fs->np = 0;
+  fs->prohibitedloc = LUAI_MAXVARS + 1;  /* nothing prohibited */
   fs->nlocvars = 0;
   fs->nactvar = 0;
   fs->bl = NULL;
@@ -944,7 +991,7 @@ static void assignment (LexState *ls, struct LHS_assign *lh, int nvars) {
   }
   else {  /* assignment -> `=' explist1 */
     int nexps;
-    checknext(ls, '=');
+    luaX_next(ls); /* consume `=' token. */
     nexps = explist1(ls, &e);
     if (nexps != nvars) {
       adjust_assign(ls, nvars, nexps, &e);
@@ -959,6 +1006,38 @@ static void assignment (LexState *ls, struct LHS_assign *lh, int nvars) {
   }
   init_exp(&e, VNONRELOC, ls->fs->freereg-1);  /* default assignment */
   luaK_storevar(ls->fs, &lh->v, &e);
+}
+
+
+static BinOpr getcompopr (int op) {
+  switch (op) {
+    case TK_ADD_EQ: return OPR_ADD_EQ;
+    case TK_SUB_EQ: return OPR_SUB_EQ;
+    case TK_MUL_EQ: return OPR_MUL_EQ;
+    case TK_DIV_EQ: return OPR_DIV_EQ;
+    case TK_MOD_EQ: return OPR_MOD_EQ;
+    case TK_POW_EQ: return OPR_POW_EQ;
+    default: return OPR_NOBINOPR;
+  }
+}
+
+
+static void compound (LexState *ls, struct LHS_assign *lh) {
+  expdesc rh;
+  int nexps;
+  BinOpr op;
+
+  check_condition(ls, VLOCAL <= lh->v.k && lh->v.k <= VINDEXED,
+                      "syntax error");
+  /* parse Compound operation. */
+  op = getcompopr(ls->t.token);
+  luaX_next(ls);
+
+  /* parse right-hand expression */
+  nexps = explist1(ls, &rh);
+  check_condition(ls, nexps == 1, "syntax error");
+
+  luaK_posfix(ls->fs, op, &(lh->v), &rh);
 }
 
 
@@ -985,6 +1064,32 @@ static void breakstat (LexState *ls) {
   if (upval)
     luaK_codeABC(fs, OP_CLOSE, bl->nactvar, 0, 0);
   luaK_concat(fs, &bl->breaklist, luaK_jump(fs));
+}
+
+
+static void continuestat (LexState *ls) {
+  FuncState *fs = ls->fs;
+  BlockCnt *bl = fs->bl;
+  int continuepos = fs->nactvar;
+  {
+    BlockCnt *b2 = bl;
+    if (b2)
+    {
+      b2 = b2->previous;
+      while (b2 && !b2->isbreakable) {
+        continuepos = bl->nactvar;
+        bl = b2;
+        b2 = b2->previous;
+      }
+    }
+    if (!b2)
+      luaX_syntaxerror(ls, "no loop to continue");
+    /* b2 is a loop block, bl is the scope block just above it,
+       continuepos is the nactvar of the scope above that */
+  }
+  if (bl->continuelist == NO_JUMP)
+    bl->continuepos = continuepos;
+  luaK_concat(fs, &bl->continuelist, luaK_jump(fs));
 }
 
 
@@ -1018,7 +1123,17 @@ static void repeatstat (LexState *ls, int line) {
   luaX_next(ls);  /* skip REPEAT */
   chunk(ls);
   check_match(ls, TK_UNTIL, TK_REPEAT, line);
-  condexit = cond(ls);  /* read condition (inside scope block) */
+  if (bl2.continuelist != NO_JUMP) {
+    int oldprohibition = fs->prohibitedloc;
+    luaK_patchtohere(fs, bl2.continuelist);
+    fs->prohibitedloc = bl2.continuepos;
+    condexit = cond(ls);  /* read condition (inside scope block) */
+    fs->prohibitedloc = oldprohibition;
+    bl2.continuelist = NO_JUMP;
+  }
+  else {
+    condexit = cond(ls);  /* read condition (inside scope block) */
+  }
   if (!bl2.upval) {  /* no upvalues? */
     leaveblock(fs);  /* finish scope */
     luaK_patchlist(ls->fs, condexit, repeat_init);  /* close the loop */
@@ -1047,7 +1162,7 @@ static void forbody (LexState *ls, int base, int line, int nvars, int isnum) {
   /* forbody -> DO block */
   BlockCnt bl;
   FuncState *fs = ls->fs;
-  int prep, endfor;
+  int prep;
   adjustlocalvars(ls, 3);  /* control variables */
   checknext(ls, TK_DO);
   prep = isnum ? luaK_codeAsBx(fs, OP_FORPREP, base, NO_JUMP) : luaK_jump(fs);
@@ -1057,10 +1172,16 @@ static void forbody (LexState *ls, int base, int line, int nvars, int isnum) {
   block(ls);
   leaveblock(fs);  /* end of scope for declared variables */
   luaK_patchtohere(fs, prep);
-  endfor = (isnum) ? luaK_codeAsBx(fs, OP_FORLOOP, base, NO_JUMP) :
-                     luaK_codeABC(fs, OP_TFORLOOP, base, 0, nvars);
-  luaK_fixline(fs, line);  /* pretend that `OP_FOR' starts the loop */
-  luaK_patchlist(fs, (isnum ? endfor : luaK_jump(fs)), prep + 1);
+  if (isnum) {
+    luaK_patchlist(fs, luaK_codeAsBx(fs, OP_FORLOOP, base, NO_JUMP), prep + 1);
+    luaK_fixline(fs, line);  /* pretend that `OP_FOR' starts the loop */
+  }
+  else {
+    luaK_codeABC(fs, OP_TFORCALL, base + 3, 3, nvars + 1);
+    luaK_fixline(fs, line);  /* pretend that `OP_FOR' starts the loop */
+    luaK_patchlist(fs, luaK_codeAsBx(fs, OP_TESTNIL, base + 2, NO_JUMP), prep + 1);
+    luaK_fixline(fs, line);  /* pretend that `OP_FOR' starts the loop */
+  }
 }
 
 
@@ -1222,15 +1343,33 @@ static void funcstat (LexState *ls, int line) {
 
 
 static void exprstat (LexState *ls) {
-  /* stat -> func | assignment */
+  /* stat -> func | compound | assignment */
   FuncState *fs = ls->fs;
   struct LHS_assign v;
   primaryexp(ls, &v.v);
   if (v.v.k == VCALL)  /* stat -> func */
     SETARG_C(getcode(fs, &v.v), 1);  /* call statement uses no results */
-  else {  /* stat -> assignment */
+  else {  /* stat -> compound | assignment */
     v.prev = NULL;
-    assignment(ls, &v, 1);
+    switch(ls->t.token) {
+      case TK_ADD_EQ:
+      case TK_SUB_EQ:
+      case TK_MUL_EQ:
+      case TK_DIV_EQ:
+      case TK_MOD_EQ:
+      case TK_POW_EQ:
+        compound(ls, &v);
+        break;
+      case ',':
+      case '=':
+        assignment(ls, &v, 1);
+        break;
+      default:
+        luaX_syntaxerror(ls,
+          luaO_pushfstring(ls->L,
+                           "'+=','-=','*=', '/=', '%=', '^=', '=' expected"));
+        break;
+    }
   }
 }
 
@@ -1312,6 +1451,11 @@ static int statement (LexState *ls) {
     case TK_BREAK: {  /* stat -> breakstat */
       luaX_next(ls);  /* skip BREAK */
       breakstat(ls);
+      return 1;  /* must be last statement */
+    }
+    case TK_CONTINUE: { /* stat -> continuestat */
+      luaX_next(ls);  /* skip CONTINUE */
+      continuestat(ls);
       return 1;  /* must be last statement */
     }
     default: {

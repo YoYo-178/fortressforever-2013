@@ -24,9 +24,11 @@ $Project "Lua (5.1.5)"
 {
 	$Folder "Source Files"
 	{
+		$File	"src\bit.c"
 		$File	"src\lapi.c"
 		$File	"src\lauxlib.c"
 		$File	"src\lbaselib.c"
+		$File	"src\lcoco.c"
 		$File	"src\lcode.c"
 		$File	"src\ldblib.c"
 		$File	"src\ldebug.c"

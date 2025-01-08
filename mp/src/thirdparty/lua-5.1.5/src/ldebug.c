@@ -403,15 +403,20 @@ static Instruction symbexec (const Proto *pt, int lastpc, int reg) {
         check(b < c);  /* at least two operands */
         break;
       }
+#ifdef LUA_COMPAT_TFORLOOP
       case OP_TFORLOOP: {
         check(c >= 1);  /* at least one result (control variable) */
         checkreg(pt, a+2+c);  /* space for results */
         if (reg >= a+2) last = pc;  /* affect all regs above its base */
         break;
       }
+#endif
       case OP_FORLOOP:
       case OP_FORPREP:
         checkreg(pt, a+3);
+        /* go through */
+      case OP_TESTNIL: 
+        checkreg(pt, a+1);
         /* go through */
       case OP_JMP: {
         int dest = pc+1+b;
@@ -420,6 +425,11 @@ static Instruction symbexec (const Proto *pt, int lastpc, int reg) {
           pc += b;  /* do the jump */
         break;
       }
+      case OP_TFORCALL:
+        check(a >= b);
+        check(b == 3);
+        check(c >= 1);
+        /* go through */
       case OP_CALL:
       case OP_TAILCALL: {
         if (b != 0) {
@@ -547,9 +557,14 @@ static const char *getfuncname (lua_State *L, CallInfo *ci, const char **name) {
     return NULL;  /* calling function is not Lua (or is unknown) */
   ci--;  /* calling function */
   i = ci_func(ci)->l.p->code[currentpc(L, ci)];
-  if (GET_OPCODE(i) == OP_CALL || GET_OPCODE(i) == OP_TAILCALL ||
-      GET_OPCODE(i) == OP_TFORLOOP)
-    return getobjname(L, ci, GETARG_A(i), name);
+  if (GET_OPCODE(i) == OP_CALL || GET_OPCODE(i) == OP_TAILCALL
+#ifdef LUA_COMPAT_TFORLOOP
+      || GET_OPCODE(i) == OP_TFORLOOP
+#endif
+                                     )
+     return getobjname(L, ci, GETARG_A(i), name);
+  else if (GET_OPCODE(i) == OP_TFORCALL)
+    return getobjname(L, ci, GETARG_A(i - 3), name);
   else
     return NULL;  /* no useful name can be found */
 }
